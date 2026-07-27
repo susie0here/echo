@@ -47,8 +47,8 @@ def get_best_model_name(api_key):
         
         # 優先選擇目前開放的標準 Flash 模型名稱
         preferred_list = [
-            'models/gemini-2.5-flash',
-            'models/gemini-3.5-flash'
+            'models/gemini-3.5-flash',
+            'models/gemini-2.5-flash'
         ]
         
         for preferred in preferred_list:
