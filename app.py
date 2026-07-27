@@ -65,6 +65,7 @@ if "final_prompt" not in st.session_state:
 # -----------------------------------------------------------------------------
 def generate_image_prompt(chat_history):
     """根據對話歷史提取特徵並生成英文生圖 Prompt"""
+    # 統一使用 gemini-1.5-flash
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt_engineer_instruction = """
     你是一位專業的 AI 繪圖 Prompt 專家。請總結以下用戶與記憶嚮導的對話內容，提取關鍵的場景、人物、光線、年代感與物品細節。
@@ -99,6 +100,7 @@ with col1:
     chat_container = st.container(height=450)
     with chat_container:
         for msg in st.session_state.messages:
+            # Streamlit 的 chat_message 支援 assistant 與 user
             role = "user" if msg["role"] == "user" else "assistant"
             with st.chat_message(role):
                 st.write(msg["parts"][0])
@@ -108,22 +110,32 @@ with col1:
         if not api_key:
             st.error("請先在左側欄輸入 Gemini API Key。")
         else:
+            # 先將用戶輸入加入 UI 記錄
             st.session_state.messages.append({"role": "user", "parts": [user_input]})
             
-            # 呼叫 Gemini 進行引導對話
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                system_instruction=SYSTEM_PROMPT
-            )
-            
-            # 轉換歷史格式給 Gemini
-            history_for_gemini = [
-                {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
-            ]
-            response = model.generate_content(history_for_gemini)
-            
-            st.session_state.messages.append({"role": "model", "parts": [response.text]})
-            st.rerun()
+            try:
+                # 建立 Gemini 模型
+                model = genai.GenerativeModel(
+                    model_name="gemini-1.5-flash",
+                    system_instruction=SYSTEM_PROMPT
+                )
+                
+                # 格式化給 Gemini API 的對話歷史（必須是 user 和 model 交替）
+                history_for_gemini = []
+                for m in st.session_state.messages:
+                    history_for_gemini.append({
+                        "role": m["role"],
+                        "parts": m["parts"]
+                    })
+                
+                response = model.generate_content(history_for_gemini)
+                
+                # 將 AI 回復存入 state
+                st.session_state.messages.append({"role": "model", "parts": [response.text]})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"調用 API 時發生錯誤：{e}")
 
     # 一鍵生成圖片按鈕
     if st.button("記憶細節已足夠，沖印這個美好時刻", use_container_width=True):
@@ -131,10 +143,13 @@ with col1:
             st.error("請輸入 API Key。")
         else:
             with st.spinner("嚮導正在梳理記憶碎片，繪製畫幅中..."):
-                prompt = generate_image_prompt(st.session_state.messages)
-                st.session_state.final_prompt = prompt
-                img_url = fetch_free_image(prompt)
-                st.session_state.image_url = img_url
+                try:
+                    prompt = generate_image_prompt(st.session_state.messages)
+                    st.session_state.final_prompt = prompt
+                    img_url = fetch_free_image(prompt)
+                    st.session_state.image_url = img_url
+                except Exception as e:
+                    st.error(f"生成圖片提示詞時發生錯誤：{e}")
 
 # 右側：記憶重現結果卡片
 with col2:
@@ -146,13 +161,17 @@ with col2:
         with st.expander("檢視背後生成的 Prompt"):
             st.write(st.session_state.final_prompt)
             
-        st.download_button(
-            label="保存珍貴記憶",
-            data=requests.get(st.session_state.image_url).content,
-            file_name="time_capsule_memory.jpg",
-            mime="image/jpeg",
-            use_container_width=True
-        )
+        try:
+            st.download_button(
+                label="保存珍貴記憶",
+                data=requests.get(st.session_state.image_url).content,
+                file_name="time_capsule_memory.jpg",
+                mime="image/jpeg",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error("圖片下載失敗，請稍後重試。")
+            
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("請在左側與嚮導聊天，當收集到足夠細節時，點擊按鈕沖印畫面。")
