@@ -42,19 +42,30 @@ st.sidebar.caption("可至 Google AI Studio 免費申請 Gemini API Key")
 def get_best_model_name(api_key):
     genai.configure(api_key=api_key)
     try:
-        # 列出所有支援生成內容的模型
+        # 取得所有可用且支援 generateContent 的模型名稱
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 優先尋找 1.5-flash 系列
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash-001', 'gemini-1.5-flash']:
+        # 優先選擇目前開放的標準 Flash 模型名稱
+        preferred_list = [
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-2.0-flash-exp',
+            'models/gemini-1.5-pro'
+        ]
+        
+        for preferred in preferred_list:
             if preferred in available_models:
                 return preferred
                 
-        # 找不到的話，挑選列表裡第一個帶有 flash 的模型
-        fallback = next((m for m in available_models if 'flash' in m), None)
-        return fallback if fallback else available_models[0]
+        # 若清單中的名稱都不在裡面，尋找第一個含 flash 且不是 2.5 的模型
+        for m in available_models:
+            if 'flash' in m and '2.5' not in m:
+                return m
+                
+        return available_models[0]
     except Exception as e:
-        return "gemini-1.5-flash-latest" # 最後的保底寫法
+        # 保底備用名稱
+        return "models/gemini-1.5-flash"
 
 # -----------------------------------------------------------------------------
 # 3. 初始化 Session 與設定
