@@ -63,10 +63,12 @@ if "final_prompt" not in st.session_state:
 # -----------------------------------------------------------------------------
 # 3. 核心邏輯函數
 # -----------------------------------------------------------------------------
+# 定義推薦的模型名稱格式（加入 models/ 前綴以相容 v1beta API）
+MODEL_NAME = "models/gemini-1.5-flash"
+
 def generate_image_prompt(chat_history):
     """根據對話歷史提取特徵並生成英文生圖 Prompt"""
-    # 統一使用 gemini-1.5-flash
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel(MODEL_NAME)
     prompt_engineer_instruction = """
     你是一位專業的 AI 繪圖 Prompt 專家。請總結以下用戶與記憶嚮導的對話內容，提取關鍵的場景、人物、光線、年代感與物品細節。
     將其轉化為一段高質量的英文 Midjourney / Stable Diffusion Prompt。
@@ -100,7 +102,6 @@ with col1:
     chat_container = st.container(height=450)
     with chat_container:
         for msg in st.session_state.messages:
-            # Streamlit 的 chat_message 支援 assistant 與 user
             role = "user" if msg["role"] == "user" else "assistant"
             with st.chat_message(role):
                 st.write(msg["parts"][0])
@@ -110,27 +111,22 @@ with col1:
         if not api_key:
             st.error("請先在左側欄輸入 Gemini API Key。")
         else:
-            # 先將用戶輸入加入 UI 記錄
             st.session_state.messages.append({"role": "user", "parts": [user_input]})
             
             try:
-                # 建立 Gemini 模型
+                # 建立 Gemini 模型（使用帶有 models/ 前綴的格式）
                 model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
+                    model_name=MODEL_NAME,
                     system_instruction=SYSTEM_PROMPT
                 )
                 
-                # 格式化給 Gemini API 的對話歷史（必須是 user 和 model 交替）
-                history_for_gemini = []
-                for m in st.session_state.messages:
-                    history_for_gemini.append({
-                        "role": m["role"],
-                        "parts": m["parts"]
-                    })
+                # 格式化歷史紀錄
+                history_for_gemini = [
+                    {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
+                ]
                 
                 response = model.generate_content(history_for_gemini)
                 
-                # 將 AI 回復存入 state
                 st.session_state.messages.append({"role": "model", "parts": [response.text]})
                 st.rerun()
                 
