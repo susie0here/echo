@@ -1,169 +1,158 @@
 import streamlit as st
+import google.generativeai as genai
 import requests
+import urllib.parse
 
-# ==========================================
-# 頁面基本配置
-# ==========================================
+# -----------------------------------------------------------------------------
+# 1. 頁面配置與樣式
+# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="時光復刻",
-    page_icon="",
-    layout="centered"
+    page_title="時光復刻機 Time Capsule",
+    layout="wide"
 )
 
-st.title("時光復刻")
-
-# ==========================================
-# Session State 初始化 (記憶對話與 Prompt 狀態)
-# ==========================================
-if "current_prompt" not in st.session_state:
-    st.session_state.current_prompt = ""
-if "revision_history" not in st.session_state:
-    st.session_state.revision_history = []
-
-# ==========================================
-# 側邊欄：API 配置 (支援 Gemini 或 OpenAI 相容接口)
-# ==========================================
-with st.sidebar:
-    st.header("⚙️ API 設定")
-    api_key = st.text_input("key", type="password", help="可在 Google AI Studio 免費申請")
-    model_name = st.selectbox("選擇模型", ["gemini-1.5-flash", "gemini-1.5-pro"])
-    
-    st.markdown("---")
-    st.markdown("### 使用說明")
-    st.markdown("1. **第一步**：輸入記憶碎片，生成初始繪圖 Prompt。\n2. **第二步**：對 Prompt 提出修改（如：*把陽光改為下雨，其餘保持不變*）。\n3. 系統將嚴格執行外科手術式修訂。")
-
-# ==========================================
-# LLM 呼叫函式 (REST API 原生串接)
-# ==========================================
-def call_gemini_api(system_prompt: str, user_prompt: str) -> str:
-    """呼叫 Gemini REST API 的通用函式"""
-    if not api_key:
-        st.error("請先在側邊欄輸入有效的 Gemini API Key！")
-        return ""
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    
-    payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}]
+st.markdown("""
+<style>
+    .main { background-color: #faf8f5; }
+    .stApp { max-width: 1100px; margin: 0 auto; }
+    .memory-card {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        border: 1px solid #eee;
     }
+    .stButton>button {
+        background-color: #8c6d58;
+        color: white;
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# 2. API 配置
+# -----------------------------------------------------------------------------
+st.sidebar.title("系統設定")
+api_key = st.sidebar.text_input("輸入 Gemini API Key (免費)", type="password")
+st.sidebar.caption("可至 Google AI Studio 免費申請 Gemini API Key")
+
+if api_key:
+    genai.configure(api_key=api_key)
+
+# 自訂的 System Prompt
+SYSTEM_PROMPT = """记住你現在是「時光復刻機」的記憶嚮導。你的任務是幫助用戶回想並補全他們珍貴但模糊的記憶，以便後續生成畫面。
+你的性格：溫柔、充滿同理心、有耐心、像一位老朋友。
+你的任務：
+用戶會提供一個記憶碎片，你需要肯定這段記憶的價值。
+每次只問 1 到 2 個問題，避免給用戶壓力。
+循序漸進地引導他們回想視覺細節：例如發生的時間（白天 / 黃昏 / 夜晚）、光線、環境佈置、人物的衣著、物品的材質與顏色、當時的表情與氛圍。
+如果用戶說「忘記了」，安慰他們「沒關係，模糊的記憶也有獨特的美感」，並自動幫他們補上合理且溫馨的預設細節。
+當收集到足夠的畫面細節（人物、場景、光線、氛圍）後，溫柔地詢問：「我們現在要把這個美好的時刻沖印出來嗎？」"""
+
+# 初始化 Session State
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "model", "parts": ["你好，我是時光復刻機的記憶嚮導。請告訴我，今天你想回想哪一段珍貴的時光？"]}
+    ]
+if "image_url" not in st.session_state:
+    st.session_state.image_url = None
+if "final_prompt" not in st.session_state:
+    st.session_state.final_prompt = ""
+
+# -----------------------------------------------------------------------------
+# 3. 核心邏輯函數
+# -----------------------------------------------------------------------------
+def generate_image_prompt(chat_history):
+    """根據對話歷史提取特徵並生成英文生圖 Prompt"""
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt_engineer_instruction = """
+    你是一位專業的 AI 繪圖 Prompt 專家。請總結以下用戶與記憶嚮導的對話內容，提取關鍵的場景、人物、光線、年代感與物品細節。
+    將其轉化為一段高質量的英文 Midjourney / Stable Diffusion Prompt。
+    風格預設為：Nostalgic 35mm film photograph, warm atmospheric lighting, highly detailed, emotional tone.
+    只輸出英文 Prompt 文字本身，不要加上任何導語或標點符號之外的說明。
+    """
     
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        data = response.json()
-        if response.status_code == 200:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    formatted_history = "\n".join([f"{m['role']}: {m['parts'][0]}" for m in chat_history])
+    response = model.generate_content([prompt_engineer_instruction, formatted_history])
+    return response.text.strip()
+
+def fetch_free_image(prompt):
+    """使用 Pollinations.ai 免費生成圖片"""
+    encoded_prompt = urllib.parse.quote(prompt)
+    image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed=42"
+    return image_url
+
+# -----------------------------------------------------------------------------
+# 4. 主介面 UI 設計
+# -----------------------------------------------------------------------------
+st.title("時光復刻機 — 喚醒模糊的珍貴記憶")
+st.subheader("透過溫暖的對話，還原那些留在時光深處的畫面。")
+
+col1, col2 = st.columns([1, 1], gap="large")
+
+# 左側：Chat 訪談對話框
+with col1:
+    st.markdown("### 記憶引導對話")
+    
+    # 顯示歷史對話
+    chat_container = st.container(height=450)
+    with chat_container:
+        for msg in st.session_state.messages:
+            role = "user" if msg["role"] == "user" else "assistant"
+            with st.chat_message(role):
+                st.write(msg["parts"][0])
+
+    # 輸入框
+    if user_input := st.chat_input("請輸入你的回憶細節..."):
+        if not api_key:
+            st.error("請先在左側欄輸入 Gemini API Key。")
         else:
-            st.error(f"API 請求失敗: {data.get('error', {}).get('message', '未知錯誤')}")
-            return ""
-    except Exception as e:
-        st.error(f"連線異常: {str(e)}")
-        return ""
-
-# ==========================================
-# System Prompts 設計 (Prompt Engineering 核心)
-# ==========================================
-
-# 1. 初始提煉 System Prompt
-BASE_PE_SYSTEM_PROMPT = """你是一位頂尖的 AI 繪圖 Prompt 工程師。
-你的任務是將用戶提供的感性記憶描述，轉化為適用於 Flux / Midjourney / SDXL 的高質量英文生圖 Prompt。
-
-【輸出結構要求】
-[Subject & Action], [Environment & Details], [Lighting & Atmosphere], [Camera Style & Quality tags: 35mm film, nostalgic tones, cinematic lighting, highly detailed, 8k resolution].
-
-【嚴格規則】
-1. 只輸出英文 Prompt 本文，絕對不要包含任何中文、開場白、解釋或 Markdown 代碼塊。
-"""
-
-# 2. 外科手術式「增刪改查」修訂 System Prompt (核心邏輯)
-REVISION_SYSTEM_PROMPT = """你是一位嚴謹的 AI 生圖 Prompt 「外科手術式修訂專家」。
-你會收到：
-1. 當前的英文生圖 Prompt (Original Prompt)
-2. 用戶的增改刪減要求 (User Feedback)
-
-【最高指令 (STRICT RULE)】：
-- 你必須【嚴格只修改】用戶明確要求變動的部分。
-- 未提及的所有物件、人物、背景、光線、相機風格、視角、詞序描述，【絕對必須 100% 原封不動保留】！
-- 嚴禁擅自優化、潤色、增添未指定的修飾詞。
-- 刪除元素：僅精準移除用戶指定的詞彙。
-- 修改元素：僅將指定元素替換，其餘描述不動。
-- 新增元素：將新元素自然插入對應位置，其餘描述不動。
-
-【輸出規則】：
-只輸出修改後的最終完整英文 Prompt 本文，禁止輸出任何解釋或多餘文字。
-"""
-
-# ==========================================
-# 主介面 UI 佈局
-# ==========================================
-tab1, tab2 = st.tabs(["階段一：生成初始 Prompt", "階段二：精準增刪修改"])
-
-# ------------------------------------------
-# Tab 1: 記憶輸入與初始 Prompt 生成
-# ------------------------------------------
-with tab1:
-    st.subheader("1. 輸入你的記憶碎片")
-    memory_input = st.text_area(
-        "請描述那段想復刻的時光（例如：小時候黃昏時，爸爸騎單車載我回家，街道兩旁是老舊的店舖）：",
-        height=120,
-        placeholder="輸入越詳細，初始生成越精準..."
-    )
-    
-    if st.button("生成初始生圖 Prompt", type="primary"):
-        if memory_input.strip():
-            with st.spinner("正在進行 Prompt Engineering 提煉中..."):
-                generated_prompt = call_gemini_api(BASE_PE_SYSTEM_PROMPT, memory_input)
-                if generated_prompt:
-                    st.session_state.current_prompt = generated_prompt
-                    st.session_state.revision_history = [("初始版本", generated_prompt)]
-                    st.success("初始 Prompt 生成成功！請切換至「階段二」進行檢視與微調。")
-        else:
-            st.warning("請先輸入記憶描述！")
-
-# ------------------------------------------
-# Tab 2: 外科手術式 Prompt 增刪修訂
-# ------------------------------------------
-with tab2:
-    st.subheader("2. 當前 Prompt 檢視與局部微調")
-    
-    if not st.session_state.current_prompt:
-        st.info("請先在「階段一」生成初始 Prompt。")
-    else:
-        # 顯示當前 Prompt
-        st.markdown("** 當前生效的生圖 Prompt：**")
-        st.code(st.session_state.current_prompt, language="text")
-        
-        st.markdown("---")
-        st.subheader("輸入反饋（局部修訂）")
-        
-        feedback_input = st.text_input(
-            "請說明要修改的地方（系統將嚴格只修改你提到的部分）：",
-            placeholder="例如：把天氣改為下雨天，並把爸爸的衣服改成紅色，其餘保持不變。"
-        )
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            submit_revision = st.button("執行精準修訂", type="primary")
+            st.session_state.messages.append({"role": "user", "parts": [user_input]})
             
-        if submit_revision and feedback_input.strip():
-            revision_request = f"""
-[Original Prompt]:
-{st.session_state.current_prompt}
+            # 呼叫 Gemini 進行引導對話
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=SYSTEM_PROMPT
+            )
+            
+            # 轉換歷史格式給 Gemini
+            history_for_gemini = [
+                {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
+            ]
+            response = model.generate_content(history_for_gemini)
+            
+            st.session_state.messages.append({"role": "model", "parts": [response.text]})
+            st.rerun()
 
-[User Feedback]:
-{feedback_input}
-"""
-            with st.spinner("正在進行修訂..."):
-                updated_prompt = call_gemini_api(REVISION_SYSTEM_PROMPT, revision_request)
-                if updated_prompt:
-                    # 更新當前 Prompt 並記錄歷史
-                    st.session_state.current_prompt = updated_prompt
-                    st.session_state.revision_history.append((f"修訂: {feedback_input}", updated_prompt))
-                    st.rerun()
+    # 一鍵生成圖片按鈕
+    if st.button("記憶細節已足夠，沖印這個美好時刻", use_container_width=True):
+        if not api_key:
+            st.error("請輸入 API Key。")
+        else:
+            with st.spinner("嚮導正在梳理記憶碎片，繪製畫幅中..."):
+                prompt = generate_image_prompt(st.session_state.messages)
+                st.session_state.final_prompt = prompt
+                img_url = fetch_free_image(prompt)
+                st.session_state.image_url = img_url
 
-        # 展示修訂歷史軌跡
-        with st.expander("查看修訂歷史版本記錄"):
-            for idx, (action, p_text) in enumerate(st.session_state.revision_history):
-                st.caption(f"**V{idx+1} - {action}**")
-                st.code(p_text, language="text")
+# 右側：記憶重現結果卡片
+with col2:
+    st.markdown("### 重現的記憶畫面")
+    if st.session_state.image_url:
+        st.markdown('<div class="memory-card">', unsafe_allow_html=True)
+        st.image(st.session_state.image_url, caption="根據你的記憶碎片重現的畫面", use_container_width=True)
+        
+        with st.expander("檢視背後生成的 Prompt"):
+            st.write(st.session_state.final_prompt)
+            
+        st.download_button(
+            label="保存珍貴記憶",
+            data=requests.get(st.session_state.image_url).content,
+            file_name="time_capsule_memory.jpg",
+            mime="image/jpeg",
+            use_container_width=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("請在左側與嚮導聊天，當收集到足夠細節時，點擊按鈕沖印畫面。")
