@@ -46,9 +46,9 @@ def get_best_model_name(api_key):
         
         # 鎖定有穩定免費額度的 1.5 系列
         preferred_list = [
-            'models/gemini-1.5-flash',
-            'models/gemini-1.5-flash-latest',
-            'models/gemini-1.5-pro'
+            'models/gemini-3.5-flash',
+            'models/gemini-3.5-flash-latest',
+            'models/gemini-2.5-flash'
         ]
         
         for preferred in preferred_list:
@@ -59,9 +59,9 @@ def get_best_model_name(api_key):
             if '1.5' in m and 'flash' in m:
                 return m
                 
-        return "models/gemini-1.5-flash"
+        return "models/gemini-3.5-flash"
     except Exception as e:
-        return "models/gemini-1.5-flash"
+        return "models/gemini-3.5-flash"
 
 # -----------------------------------------------------------------------------
 # 3. 初始化 Session 與 Prompt
