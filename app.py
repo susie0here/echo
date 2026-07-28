@@ -2,6 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 import requests
 import urllib.parse
+import time
 
 # -----------------------------------------------------------------------------
 # 1. 頁面配置與樣式
@@ -37,36 +38,33 @@ st.sidebar.title("系統設定")
 api_key = st.sidebar.text_input("輸入 Gemini API Key (免費)", type="password")
 st.sidebar.caption("可至 Google AI Studio 免費申請 Gemini API Key")
 
-# 這裡設計一個函數來自動找尋你帳號支援的模型
 @st.cache_data(show_spinner=False)
 def get_best_model_name(api_key):
     genai.configure(api_key=api_key)
     try:
-        # 取得所有可用且支援 generateContent 的模型名稱
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 優先選擇目前開放的標準 Flash 模型名稱
+        # 鎖定有穩定免費額度的 1.5 系列
         preferred_list = [
-            'models/gemini-3.5-flash',
-            'models/gemini-2.5-flash'
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-1.5-pro'
         ]
         
         for preferred in preferred_list:
             if preferred in available_models:
                 return preferred
                 
-        # 若清單中的名稱都不在裡面，尋找第一個含 flash 且不是 2.5 的模型
         for m in available_models:
-            if 'flash' in m and '2.5' not in m:
+            if '1.5' in m and 'flash' in m:
                 return m
                 
-        return available_models[0]
+        return "models/gemini-1.5-flash"
     except Exception as e:
-        # 保底備用名稱
         return "models/gemini-1.5-flash"
 
 # -----------------------------------------------------------------------------
-# 3. 初始化 Session 與設定
+# 3. 初始化 Session 與 Prompt
 # -----------------------------------------------------------------------------
 SYSTEM_PROMPT = """记住你現在是「時光復刻機」的記憶嚮導。你的任務是幫助用戶回想並補全他們珍貴但模糊的記憶，以便後續生成畫面。
 你的性格：溫柔、充滿同理心、有耐心、像一位老朋友。
@@ -117,7 +115,6 @@ st.subheader("透過溫暖的對話，還原那些留在時光深處的畫面。
 
 if api_key:
     genai.configure(api_key=api_key)
-    # 取得當前帳號可用的模型
     active_model_name = get_best_model_name(api_key)
     st.sidebar.success(f"已連接模型：{active_model_name}")
 else:
@@ -141,26 +138,41 @@ with col1:
         if not api_key or not active_model_name:
             st.error("請先在左側欄輸入 Gemini API Key。")
         else:
+            # 1. 顯示並保存用戶輸入
             st.session_state.messages.append({"role": "user", "parts": [user_input]})
-            
-            try:
-                # 使用系統自動偵測到的模型
-                model = genai.GenerativeModel(
-                    model_name=active_model_name,
-                    system_instruction=SYSTEM_PROMPT
-                )
-                
-                history_for_gemini = [
-                    {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
-                ]
-                
-                response = model.generate_content(history_for_gemini)
-                
-                st.session_state.messages.append({"role": "model", "parts": [response.text]})
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"調用 API 時發生錯誤：{e}")
+            with chat_container:
+                with st.chat_message("user"):
+                    st.write(user_input)
+
+                # 2. 在 UI 上建立 AI 訊息區塊，並加上思考動畫與實時 Streaming 串流
+                with st.chat_message("assistant"):
+                    with st.spinner("嚮導正在認真思考與傾聽..."):
+                        try:
+                            model = genai.GenerativeModel(
+                                model_name=active_model_name,
+                                system_instruction=SYSTEM_PROMPT
+                            )
+                            
+                            history_for_gemini = [
+                                {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
+                            ]
+                            
+                            # 啟用 stream=True 進行串流生成
+                            response_stream = model.generate_content(history_for_gemini, stream=True)
+                            
+                            def stream_generator():
+                                for chunk in response_stream:
+                                    if chunk.text:
+                                        yield chunk.text
+                            
+                            # Streamlit 實時打字生成效果
+                            full_response = st.write_stream(stream_generator())
+                            
+                            # 存入對話歷史紀錄
+                            st.session_state.messages.append({"role": "model", "parts": [full_response]})
+                            
+                        except Exception as e:
+                            st.error(f"調用 API 時發生錯誤：{e}")
 
     if st.button("記憶細節已足夠，沖印這個美好時刻", use_container_width=True):
         if not api_key or not active_model_name:
@@ -172,6 +184,7 @@ with col1:
                     st.session_state.final_prompt = prompt
                     img_url = fetch_free_image(prompt)
                     st.session_state.image_url = img_url
+                    st.rerun()
                 except Exception as e:
                     st.error(f"生成圖片提示詞時發生錯誤：{e}")
 
