@@ -47,7 +47,7 @@ def get_best_model_name(api_key):
         preferred_list = [
             'models/gemini-3.5-flash',
             'models/gemini-3.5-flash-latest',
-            'models/gemini-3.5-flash'
+            'models/gemini-2.5-flash'
         ]
         
         for preferred in preferred_list:
@@ -145,6 +145,8 @@ with col1:
                 with st.chat_message("assistant"):
                     # 階段 1：等待第一個 Chunk 數據返回時顯示思考提示
                     first_chunk = None
+                    stream_iterator = None
+                    
                     with st.spinner("嚮導正在認真思考與傾聽..."):
                         try:
                             model = genai.GenerativeModel(
@@ -157,19 +159,20 @@ with col1:
                             ]
                             
                             response_stream = model.generate_content(history_for_gemini, stream=True)
-                            # 獲取第一個 chunk，此時 spinner 在 with 區塊結束後將會立即消失
-                            first_chunk = next(response_stream)
+                            # 使用 iter() 轉為標準迭代器
+                            stream_iterator = iter(response_stream)
+                            first_chunk = next(stream_iterator)
                         except Exception as e:
                             st.error(f"調用 API 時發生錯誤：{e}")
 
                     # 階段 2：思考提示消失後，順暢無衝突地輸出文字
-                    if first_chunk:
+                    if first_chunk and stream_iterator:
                         def smooth_stream_generator():
                             if first_chunk.text:
                                 for char in first_chunk.text:
                                     yield char
                                     time.sleep(0.015)
-                            for chunk in response_stream:
+                            for chunk in stream_iterator:
                                 if chunk.text:
                                     for char in chunk.text:
                                         yield char
