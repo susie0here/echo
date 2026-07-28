@@ -185,9 +185,6 @@ with col1:
                         full_response = st.write_stream(smooth_stream_generator())
                         st.session_state.messages.append({"role": "model", "parts": [full_response]})
                             
-                        except Exception as e:
-                            st.error(f"調用 API 時發生錯誤：{e}")
-
     if st.button("記憶細節已足夠，沖印這個美好時刻", use_container_width=True):
         if not api_key or not active_model_name:
             st.error("請輸入 API Key。")
