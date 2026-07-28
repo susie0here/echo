@@ -160,13 +160,16 @@ with col1:
                             # 啟用 stream=True 進行串流生成
                             response_stream = model.generate_content(history_for_gemini, stream=True)
                             
-                            def stream_generator():
+                            def smooth_stream_generator():
                                 for chunk in response_stream:
                                     if chunk.text:
-                                        yield chunk.text
+                                        # 逐字/逐小塊吐出，並加入微小延遲讓視覺更平滑
+                                        for char in chunk.text:
+                                            yield char
+                                            time.sleep(0.015) # 0.015秒的微小平滑間隔
                             
-                            # Streamlit 實時打字生成效果
-                            full_response = st.write_stream(stream_generator())
+                            # 使用平滑生成器進行實時打字
+                            full_response = st.write_stream(smooth_stream_generator())
                             
                             # 存入對話歷史紀錄
                             st.session_state.messages.append({"role": "model", "parts": [full_response]})
