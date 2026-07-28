@@ -44,11 +44,10 @@ def get_best_model_name(api_key):
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 鎖定有穩定免費額度的 1.5 系列
         preferred_list = [
             'models/gemini-3.5-flash',
             'models/gemini-3.5-flash-latest',
-            'models/gemini-2.5-flash'
+            'models/gemini-3.5-flash'
         ]
         
         for preferred in preferred_list:
@@ -56,7 +55,7 @@ def get_best_model_name(api_key):
                 return preferred
                 
         for m in available_models:
-            if '1.5' in m and 'flash' in m:
+            if '3.5' in m and 'flash' in m:
                 return m
                 
         return "models/gemini-3.5-flash"
@@ -138,15 +137,14 @@ with col1:
         if not api_key or not active_model_name:
             st.error("請先在左側欄輸入 Gemini API Key。")
         else:
-            # 1. 顯示並保存用戶輸入
             st.session_state.messages.append({"role": "user", "parts": [user_input]})
             with chat_container:
                 with st.chat_message("user"):
                     st.write(user_input)
 
-                # 2. 在 UI 上建立 AI 訊息區塊，並加上思考動畫與實時 Streaming 串流
                 with st.chat_message("assistant"):
-                    # 階段 1：僅在等待 API 響應的第一個 Chunk 時顯示思考動畫
+                    # 階段 1：等待第一個 Chunk 數據返回時顯示思考提示
+                    first_chunk = None
                     with st.spinner("嚮導正在認真思考與傾聽..."):
                         try:
                             model = genai.GenerativeModel(
@@ -158,24 +156,19 @@ with col1:
                                 {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
                             ]
                             
-                            # 發起 API 請求
                             response_stream = model.generate_content(history_for_gemini, stream=True)
-                            
-                            # 強制讀取第一個 chunk，確保已經拿到數據（此時 spinner 在 with 結束後會立刻消失）
+                            # 獲取第一個 chunk，此時 spinner 在 with 區塊結束後將會立即消失
                             first_chunk = next(response_stream)
                         except Exception as e:
                             st.error(f"調用 API 時發生錯誤：{e}")
-                            first_chunk = None
 
-                    # 階段 2：思考動畫已關閉，開始順暢輸出文字
+                    # 階段 2：思考提示消失後，順暢無衝突地輸出文字
                     if first_chunk:
                         def smooth_stream_generator():
-                            # 先吐出第一個 chunk 的內容
                             if first_chunk.text:
                                 for char in first_chunk.text:
                                     yield char
                                     time.sleep(0.015)
-                            # 繼續吐出剩餘 chunk 的內容
                             for chunk in response_stream:
                                 if chunk.text:
                                     for char in chunk.text:
@@ -184,7 +177,7 @@ with col1:
                         
                         full_response = st.write_stream(smooth_stream_generator())
                         st.session_state.messages.append({"role": "model", "parts": [full_response]})
-                            
+
     if st.button("記憶細節已足夠，沖印這個美好時刻", use_container_width=True):
         if not api_key or not active_model_name:
             st.error("請輸入 API Key。")
