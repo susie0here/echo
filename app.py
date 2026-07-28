@@ -146,6 +146,7 @@ with col1:
 
                 # 2. 在 UI 上建立 AI 訊息區塊，並加上思考動畫與實時 Streaming 串流
                 with st.chat_message("assistant"):
+                    # 階段 1：僅在等待 API 響應的第一個 Chunk 時顯示思考動畫
                     with st.spinner("嚮導正在認真思考與傾聽..."):
                         try:
                             model = genai.GenerativeModel(
@@ -157,22 +158,32 @@ with col1:
                                 {"role": m["role"], "parts": m["parts"]} for m in st.session_state.messages
                             ]
                             
-                            # 啟用 stream=True 進行串流生成
+                            # 發起 API 請求
                             response_stream = model.generate_content(history_for_gemini, stream=True)
                             
-                            def smooth_stream_generator():
-                                for chunk in response_stream:
-                                    if chunk.text:
-                                        # 逐字/逐小塊吐出，並加入微小延遲讓視覺更平滑
-                                        for char in chunk.text:
-                                            yield char
-                                            time.sleep(0.015) # 0.015秒的微小平滑間隔
-                            
-                            # 使用平滑生成器進行實時打字
-                            full_response = st.write_stream(smooth_stream_generator())
-                            
-                            # 存入對話歷史紀錄
-                            st.session_state.messages.append({"role": "model", "parts": [full_response]})
+                            # 強制讀取第一個 chunk，確保已經拿到數據（此時 spinner 在 with 結束後會立刻消失）
+                            first_chunk = next(response_stream)
+                        except Exception as e:
+                            st.error(f"調用 API 時發生錯誤：{e}")
+                            first_chunk = None
+
+                    # 階段 2：思考動畫已關閉，開始順暢輸出文字
+                    if first_chunk:
+                        def smooth_stream_generator():
+                            # 先吐出第一個 chunk 的內容
+                            if first_chunk.text:
+                                for char in first_chunk.text:
+                                    yield char
+                                    time.sleep(0.015)
+                            # 繼續吐出剩餘 chunk 的內容
+                            for chunk in response_stream:
+                                if chunk.text:
+                                    for char in chunk.text:
+                                        yield char
+                                        time.sleep(0.015)
+                        
+                        full_response = st.write_stream(smooth_stream_generator())
+                        st.session_state.messages.append({"role": "model", "parts": [full_response]})
                             
                         except Exception as e:
                             st.error(f"調用 API 時發生錯誤：{e}")
